@@ -252,10 +252,6 @@
                         <i data-lucide="brain-circuit" class="w-4 h-4"></i>
                         Generar Informe Ejecutivo
                     </button>
-                    <button id="btn-ai-tts" disabled class="flex items-center justify-center gap-2 bg-white hover:bg-slate-100 text-slate-700 disabled:opacity-50 text-xs px-3.5 py-2.5 rounded-xl transition border border-slate-300 shadow-sm font-medium">
-                        <i data-lucide="volume-2" class="w-4 h-4 text-emerald-600"></i>
-                        <span class="hidden sm:inline">Escuchar Resumen</span>
-                    </button>
                 </div>
             </div>
 
@@ -905,8 +901,26 @@
             chartTrend.data.datasets[0].data = displayYm.map(ym => monthlyMap[ym]);
             chartTrend.update();
 
+            // Dataset for Municipality & CMD charts: ignore population filter so they remain static when filtering by municipality
+            const yearVal = document.getElementById('filter-year').value;
+            const statusVal = document.getElementById('filter-status').value;
+            const globalChartDataset = rawDataset.filter(d => {
+                if (yearVal !== 'ALL') {
+                    if (!d.Fecha) return false;
+                    const y = d.Fecha.substring(0, 4);
+                    if (yearVal === 'PRE2019') {
+                        if (parseInt(y) >= 2019) return false;
+                    } else if (y !== yearVal) {
+                        return false;
+                    }
+                }
+                if (statusVal === 'NORMAL' && d.Observaciones) return false;
+                if (statusVal === 'OBS' && !d.Observaciones) return false;
+                return true;
+            });
+
             const muniMap = {};
-            filteredDataset.forEach(d => {
+            globalChartDataset.forEach(d => {
                 const pob = normalizePoblacion(d.Poblacion);
                 const cmes = parseNumericValue(d.CMES);
                 if (cmes !== null && cmes > 0) {
@@ -921,7 +935,7 @@
 
             const devCmdMap = {};
             const devCmdCount = {};
-            filteredDataset.forEach(d => {
+            globalChartDataset.forEach(d => {
                 const dev = d.NombreDispositivo || d.CodigoDispositivo || 'Desconocido';
                 const cmd = parseNumericValue(d.CMD);
                 if (cmd !== null) {
@@ -1435,7 +1449,6 @@ Por favor, proporciona un resumen ejecutivo en 1 o 2 párrafos concisos y profes
                 if (aiText) {
                     lastAISummaryText = aiText;
                     outputBox.innerHTML = `<span class="text-slate-800 font-normal">${aiText}</span>`;
-                    document.getElementById('btn-ai-tts').disabled = false;
                 } else {
                     outputBox.textContent = "No se pudo obtener el informe en este momento.";
                 }
@@ -1485,111 +1498,10 @@ Responde la consulta del usuario en español de forma precisa basándote en la r
                 if (text) {
                     lastAISummaryText = text;
                     outputBox.innerHTML = `<span class="text-slate-800"><strong class="text-emerald-700">Respuesta IA:</strong> ${text}</span>`;
-                    document.getElementById('btn-ai-tts').disabled = false;
                 }
             } catch (err) {
                 console.error(err);
                 outputBox.textContent = "No se pudo procesar la consulta.";
-            }
-        }
-
-        async function speakAISummary() {
-            if (!lastAISummaryText) return;
-
-            const btn = document.getElementById('btn-ai-tts');
-            btn.disabled = true;
-            btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin text-emerald-600"></i> Sintetizando...';
-            lucide.createIcons();
-
-            try {
-                const apiKey = "";
-                const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${apiKey}`;
-
-                const payload = {
-                    contents: [{
-                        parts: [{ text: `Lee pausada y profesionalmente en español: ${lastAISummaryText}` }]
-                    }],
-                    generationConfig: {
-                        responseModalities: ["AUDIO"],
-                        speechConfig: {
-                            voiceConfig: { prebuiltVoiceConfig: { voiceName: "Sulafat" } }
-                        }
-                    }
-                };
-
-                const response = await fetch(apiUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                const result = await response.json();
-                const part = result?.candidates?.[0]?.content?.parts?.[0];
-                const audioData = part?.inlineData?.data;
-                const mimeType = part?.inlineData?.mimeType;
-
-                if (audioData && mimeType && mimeType.startsWith("audio/")) {
-                    const sampleRateMatch = mimeType.match(/rate=(\d+)/);
-                    const sampleRate = sampleRateMatch ? parseInt(sampleRateMatch[1], 10) : 24000;
-                    
-                    const pcm16 = new Int16Array(base64ToArrayBuffer(audioData));
-                    const wavBlob = pcmToWav(pcm16, sampleRate);
-                    const audioUrl = URL.createObjectURL(wavBlob);
-                    
-                    const audio = new Audio(audioUrl);
-                    audio.play();
-                } else {
-                    alert("No se pudo obtener el audio sintetizado.");
-                }
-            } catch (err) {
-                console.error(err);
-                alert("Error al intentar sintetizar la voz con Gemini.");
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = '<i data-lucide="volume-2" class="w-4 h-4 text-emerald-600"></i> Escuchar Resumen';
-                lucide.createIcons();
-            }
-        }
-
-        function base64ToArrayBuffer(base64) {
-            const binaryString = window.atob(base64);
-            const len = binaryString.length;
-            const bytes = new Uint8Array(len);
-            for (let i = 0; i < len; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-            return bytes.buffer;
-        }
-
-        function pcmToWav(pcm16, sampleRate) {
-            const buffer = new ArrayBuffer(44 + pcm16.length * 2);
-            const view = new DataView(buffer);
-
-            writeString(view, 0, 'RIFF');
-            view.setUint32(4, 36 + pcm16.length * 2, true);
-            writeString(view, 8, 'WAVE');
-            writeString(view, 12, 'fmt ');
-            view.setUint32(16, 16, true);
-            view.setUint16(20, 1, true);
-            view.setUint16(22, 1, true);
-            view.setUint32(24, sampleRate, true);
-            view.setUint32(28, sampleRate * 2, true);
-            view.setUint16(32, 2, true);
-            view.setUint16(34, 16, true);
-            writeString(view, 36, 'data');
-            view.setUint32(40, pcm16.length * 2, true);
-
-            let offset = 44;
-            for (let i = 0; i < pcm16.length; i++, offset += 2) {
-                view.setInt16(offset, pcm16[i], true);
-            }
-
-            return new Blob([buffer], { type: 'audio/wav' });
-        }
-
-        function writeString(view, offset, string) {
-            for (let i = 0; i < string.length; i++) {
-                view.setUint8(offset + i, string.charCodeAt(i));
             }
         }
 
@@ -1657,7 +1569,6 @@ Responde la consulta del usuario en español de forma precisa basándote en la r
 
             document.getElementById('btn-ai-summary').addEventListener('click', generateAISummary);
             document.getElementById('ai-query-form').addEventListener('submit', handleAIQuerySubmit);
-            document.getElementById('btn-ai-tts').addEventListener('click', speakAISummary);
         });
     </script>
 </body>
